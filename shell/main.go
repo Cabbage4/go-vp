@@ -7,26 +7,53 @@ import (
 	"io"
 	"net"
 	"runtime"
+	"sync"
 	"time"
 )
 
 var (
-	addr   string
-	target int
+	addr      string
+	target    int
+	secretKey string
+
+	errorCount int
 )
 
 func main() {
 	flag.StringVar(&addr, "addr", ":10022", "")
 	flag.IntVar(&target, "target", 8081, "")
+	flag.StringVar(&secretKey, "secretKey", "jerryzhuo@abcd", "")
 	flag.Parse()
 
+	g := new(sync.WaitGroup)
+
 	worker := func() {
+		defer g.Done()
+
 		for {
+			if errorCount > 10 {
+				fmt.Println("errorCount > 10")
+				return
+			}
+
 			cnn, err := net.Dial("tcp", addr)
 			if err != nil {
+				errorCount++
 				fmt.Println(err)
+				time.Sleep(5 * time.Second)
 				continue
 			}
+
+			signature, err := butin.GenSignature(time.Now().Unix(), secretKey)
+			if err != nil {
+				errorCount++
+				fmt.Println(err)
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			cnn.Write(signature)
+			errorCount = 0
 
 			var tCnn net.Conn
 			buf := make([]byte, 1024)
@@ -50,6 +77,7 @@ func main() {
 						break
 					}
 
+					fmt.Printf("[%s->%s]link\n", cnn.RemoteAddr().String(), tCnn.RemoteAddr().String())
 					go io.Copy(cnn, tCnn)
 				}
 
@@ -62,15 +90,16 @@ func main() {
 			cnn.Close()
 			if tCnn != nil {
 				tCnn.Close()
+				fmt.Printf("[%s->%s]done\n", cnn.RemoteAddr().String(), tCnn.RemoteAddr().String())
+				tCnn = nil
 			}
 		}
 	}
 
 	for i := 0; i < runtime.NumCPU(); i++ {
+		g.Add(1)
 		go worker()
 	}
 
-	for {
-		<-time.After(1 * time.Minute)
-	}
+	g.Wait()
 }
