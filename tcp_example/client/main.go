@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"strings"
 )
 
 func main() {
@@ -10,7 +11,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	cnn.Write([]byte("hi"))
+	cnn.Write([]byte(strings.Repeat("hgggg", 10000)))
 
 	buf := make([]byte, 1024)
 	n, err := cnn.Read(buf)

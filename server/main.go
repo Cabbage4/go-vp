@@ -3,15 +3,21 @@ package main
 import (
 	"flag"
 	"fmt"
-	"go-vp/butin"
-	"io"
+	"log"
 	"net"
+	"net/http"
+	"runtime"
+	"time"
+
+	"golang.org/x/net/websocket"
 )
 
 var (
 	outPort    int
 	serverPort int
 	secretKey  string
+
+	cnnChan = make(chan net.Conn, runtime.NumCPU())
 )
 
 func main() {
@@ -25,75 +31,62 @@ func main() {
 		panic(err)
 	}
 
-	sLn, err := net.Listen("tcp", fmt.Sprintf(":%d", serverPort))
-	if err != nil {
-		panic(err)
-	}
+	go func() {
+		http.Handle("/", websocket.Handler(worker))
+		http.ListenAndServe(fmt.Sprintf(":%d", serverPort), nil)
+	}()
 
 	for {
 		cnn, err := ln.Accept()
 		if err != nil {
-			fmt.Println(err)
+			log.Println(err)
 			continue
 		}
 
-		sCnn, err := sLn.Accept()
-		if err != nil {
-			cnn.Close()
-
-			fmt.Println(err)
-			continue
-		}
-
-		signatureBuf := make([]byte, (64+128)/8)
-		n, err := sCnn.Read(signatureBuf)
-		if err != nil {
-			cnn.Close()
-			sCnn.Close()
-
-			fmt.Println(err)
-			continue
-		}
-
-		if n != (64+128)/8 {
-			cnn.Close()
-			sCnn.Close()
-
-			fmt.Println("signature len error")
-			continue
-		}
-
-		if err := butin.CheckSignature(signatureBuf, secretKey); err != nil {
-			cnn.Close()
-			sCnn.Close()
-
-			fmt.Println(err)
-			continue
-		}
-
-		fmt.Printf("[%s->%s]link\n", cnn.RemoteAddr().String(), sCnn.RemoteAddr().String())
-
-		go func() {
-			if _, err := io.Copy(cnn, sCnn); err != nil {
-				if !butin.IsSkipError(err) {
-					fmt.Printf("[%s->%s]error|%s\n", cnn.RemoteAddr().String(), sCnn.RemoteAddr().String(), err)
-				}
-			}
-
-			cnn.Close()
-			sCnn.Close()
-		}()
-
-		go func() {
-			if _, err := io.Copy(sCnn, cnn); err != nil {
-				if !butin.IsSkipError(err) {
-					fmt.Printf("[%s->%s]error|%s\n", cnn.RemoteAddr().String(), sCnn.RemoteAddr().String(), err)
-				}
-			}
-
-			cnn.Close()
-			sCnn.Close()
-			fmt.Printf("[%s->%s]done\n", cnn.RemoteAddr().String(), sCnn.RemoteAddr().String())
-		}()
+		cnnChan <- cnn
 	}
+}
+
+func worker(w *websocket.Conn) {
+	cnn := <-cnnChan
+
+	defer func() {
+		w.Close()
+		cnn.Close()
+	}()
+
+	ch := make(chan bool, 2)
+	startTime := time.Now()
+
+	go func() {
+		defer func() { ch <- true }()
+
+		var buf string
+		for {
+			err := websocket.Message.Receive(w, &buf)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			cnn.Write([]byte(buf))
+		}
+	}()
+
+	go func() {
+		defer func() { ch <- true }()
+
+		buf := make([]byte, 1024)
+		for {
+			n, err := cnn.Read(buf)
+			if err != nil {
+				log.Println(err)
+				break
+			}
+
+			websocket.Message.Send(w, buf[:n])
+		}
+	}()
+
+	<-ch
+	log.Printf("cost time = %s\n", time.Since(startTime))
 }

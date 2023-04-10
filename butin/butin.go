@@ -7,23 +7,35 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"strings"
-	"time"
+	"net"
 )
 
-var (
-	skipError = []string{"connection reset by peer", "use of closed network connection", "EOF"}
+const (
+	ProtocolVersion = 0
+
+	ProtocolVersionLen = 1
+	ProtocolCmdLen     = 1
+	ProtocolDataLen    = 4
+	ProtocolMaxLen     = 256 * 256
 )
 
-func IsSkipError(err error) bool {
-	for _, v := range skipError {
-		if strings.Contains(err.Error(), v) {
-			return true
-		}
-	}
+const (
+	CmdSignCheck Cmd = 0 + iota
+	CmdSignSuccess
+	CmdSignError
 
-	return false
-}
+	CmdPing
+	CmdPong
+
+	CmdConnectionNew
+	CmdConnectionData
+	CmdConnectionClientCloseReq
+	CmdConnectionClientCloseRsp
+	CmdConnectionServerCloseReq
+	CmdConnectionServerCloseRsp
+)
+
+type Cmd int
 
 func GenSignature(timestamp int64, secretKey string) ([]byte, error) {
 	buf := new(bytes.Buffer)
@@ -43,6 +55,10 @@ func GenSignature(timestamp int64, secretKey string) ([]byte, error) {
 }
 
 func CheckSignature(signature []byte, secretKey string) error {
+	if len(signature) != (64+128)/8 {
+		return fmt.Errorf("signature length error:%d", len(signature))
+	}
+
 	buf := bytes.NewBuffer([]byte(signature))
 
 	var timestamp int64
@@ -50,9 +66,9 @@ func CheckSignature(signature []byte, secretKey string) error {
 		return err
 	}
 
-	if time.Now().Unix()-timestamp > 60 {
-		return fmt.Errorf("signature timeout")
-	}
+	// if time.Now().Unix()-timestamp > 60 {
+	// 	return fmt.Errorf("signature timeout")
+	// }
 
 	keyByte := make([]byte, 128/8)
 	if err := binary.Read(buf, binary.BigEndian, &keyByte); err != nil {
@@ -67,4 +83,41 @@ func CheckSignature(signature []byte, secretKey string) error {
 	}
 
 	return nil
+}
+
+func GenBuf() []byte {
+	return make([]byte, ProtocolMaxLen)
+}
+
+func GenDataBuf() []byte {
+	return make([]byte, ProtocolMaxLen-ProtocolVersionLen-ProtocolCmdLen-ProtocolDataLen)
+}
+
+func ReadCmd(buf []byte) Cmd {
+	return Cmd(buf[ProtocolCmdLen])
+}
+
+func ReadData(buf []byte) []byte {
+	offset := ProtocolVersionLen + ProtocolCmdLen + ProtocolDataLen
+
+	var dataLen int32
+	bytesBuffer := bytes.NewBuffer(buf[offset-ProtocolDataLen : offset])
+	binary.Read(bytesBuffer, binary.BigEndian, &dataLen)
+
+	return buf[offset : offset+int(dataLen)]
+}
+
+func WriteCmdAndData(cnn net.Conn, cmd Cmd, data []byte) {
+	if len(data) == 0 {
+		cnn.Write([]byte{ProtocolVersion, byte(cmd)})
+		cnn.Write(make([]byte, ProtocolDataLen))
+		return
+	}
+
+	bytesBuffer := bytes.NewBuffer([]byte{})
+	binary.Write(bytesBuffer, binary.BigEndian, int32(len(data)))
+
+	cnn.Write([]byte{ProtocolVersion, byte(cmd)})
+	cnn.Write(bytesBuffer.Bytes())
+	cnn.Write(data)
 }

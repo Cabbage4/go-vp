@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"strings"
 )
 
 func main() {
@@ -18,7 +19,7 @@ func main() {
 			continue
 		}
 
-		cnn.Write([]byte("hello world"))
+		cnn.Write([]byte(strings.Repeat("hello-", 100)))
 		cnn.Close()
 	}
 }
