@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"go-vp/butin"
 	"io"
 	"log"
 	"net"
@@ -54,6 +55,16 @@ func worker() {
 		w.Close()
 		cnn.Close()
 	}()
+
+	signature, err := butin.GenSignature(time.Now().Unix(), secretKey)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	if _, err := w.Write(signature); err != nil {
+		log.Println(err)
+		return
+	}
 
 	ch := make(chan bool, 3)
 	startTime := time.Now()

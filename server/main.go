@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"go-vp/butin"
 	"log"
 	"net"
 	"net/http"
@@ -54,6 +55,20 @@ func worker(w *websocket.Conn) {
 		w.Close()
 		cnn.Close()
 	}()
+
+	var signature string
+	if err := websocket.Message.Receive(w, &signature); err != nil {
+		log.Println(err)
+		return
+	}
+	if len(signature) != (64+128)/8 {
+		log.Println("signature len error")
+		return
+	}
+	if err := butin.CheckSignature([]byte(signature), secretKey); err != nil {
+		log.Println(err)
+		return
+	}
 
 	ch := make(chan bool, 2)
 	startTime := time.Now()
