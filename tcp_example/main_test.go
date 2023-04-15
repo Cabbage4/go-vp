@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"testing"
 )
 
-func main() {
+func TestEcho(t *testing.T) {
 	cnn, err := net.Dial("tcp", ":10021")
 	if err != nil {
 		panic(err)

@@ -9,6 +9,10 @@ import (
 	"fmt"
 )
 
+const (
+	TranDataKey = "start-data"
+)
+
 func GenSignature(timestamp int64, secretKey string) ([]byte, error) {
 	buf := new(bytes.Buffer)
 

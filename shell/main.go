@@ -9,8 +9,6 @@ import (
 	"net"
 	"runtime"
 	"time"
-
-	"golang.org/x/net/websocket"
 )
 
 var (
@@ -28,69 +26,69 @@ func main() {
 	flag.Parse()
 
 	for {
-		go worker()
-		<-ch
+		ch <- struct{}{}
+
+		go func() {
+			if err := worker(); err != nil {
+				log.Println(err)
+			}
+		}()
 	}
 }
 
-func worker() {
+func worker() error {
 	defer func() {
-		<-time.After(2 * time.Second)
-		ch <- struct{}{}
+		<-ch
 	}()
 
-	w, err := websocket.Dial(fmt.Sprintf("ws://%s", addr), "", fmt.Sprintf("http://%s", addr))
+	cnn, err := net.Dial("tcp", addr)
 	if err != nil {
-		log.Println(err)
-		return
+		return err
 	}
-
-	cnn, err := net.Dial("tcp", fmt.Sprintf(":%d", target))
-	if err != nil {
-		log.Println(err)
-		return
-	}
-
-	defer func() {
-		w.Close()
-		cnn.Close()
-	}()
+	defer cnn.Close()
 
 	signature, err := butin.GenSignature(time.Now().Unix(), secretKey)
 	if err != nil {
-		log.Println(err)
-		return
+		return err
 	}
-	if _, err := w.Write(signature); err != nil {
-		log.Println(err)
-		return
+	if _, err := cnn.Write(signature); err != nil {
+		return err
 	}
 
-	ch := make(chan bool, 3)
-	startTime := time.Now()
+	// NAT timeout
+	cnn.SetReadDeadline(time.Now().Add(2 * time.Hour))
 
+	tranDataKeyBuf := make([]byte, len(butin.TranDataKey))
+	n, err := cnn.Read(tranDataKeyBuf)
+	if err != nil {
+		return err
+	}
+	if string(tranDataKeyBuf[:n]) != butin.TranDataKey {
+		return fmt.Errorf("tranDataKey error:%s", tranDataKeyBuf[:n])
+	}
+
+	tnn, err := net.Dial("tcp", fmt.Sprintf(":%d", target))
+	if err != nil {
+		return err
+	}
+	defer tnn.Close()
+
+	ch := make(chan struct{}, 3)
 	go func() {
-		// 解决NAT问题
-		<-time.After(2 * time.Hour)
-		ch <- true
+		if _, err := io.Copy(cnn, tnn); err != nil {
+			log.Println(err)
+		}
+		ch <- struct{}{}
 	}()
 
 	go func() {
-		defer func() { ch <- true }()
-
-		if _, err := io.Copy(w, cnn); err != nil {
+		if _, err := io.Copy(tnn, cnn); err != nil {
 			log.Println(err)
 		}
-	}()
-
-	go func() {
-		defer func() { ch <- true }()
-
-		if _, err := io.Copy(cnn, w); err != nil {
-			log.Println(err)
-		}
+		ch <- struct{}{}
 	}()
 
 	<-ch
-	log.Printf("cost time = %s\n", time.Since(startTime))
+
+	return nil
 }
